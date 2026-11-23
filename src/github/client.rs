@@ -15,6 +15,8 @@ use url::Url;
 use crate::github::IssueRepository;
 use crate::jobs::Job;
 use bytes::Bytes;
+use http::{HeaderName, HeaderValue};
+use serde::Serialize;
 
 // TODO: Update to "2026-03-10" and see what breaks
 // current version 2022-11-28 (supported until March 2028)
@@ -133,7 +135,19 @@ impl GithubClient {
         &self.client
     }
 
-    pub async fn send_req(&self, req: RequestBuilder) -> anyhow::Result<(Bytes, String)> {
+    /// Prepares the request for being sent out.
+    /// Configures authentication for it.
+    pub(crate) fn prepare_request(&self, req: GithubRequest) -> anyhow::Result<(Request, String)> {
+        let GithubRequest { url: _, request } = req;
+        let req_dbg = format!("{request:?}");
+        let request = request.configure(self);
+        let req = request
+            .build()
+            .with_context(|| format!("failed to build request {req_dbg:?}"))?;
+        Ok((req, req_dbg))
+    }
+
+    pub async fn send_req(&self, req: GithubRequest) -> anyhow::Result<(Bytes, String)> {
         const MAX_DEFAULT_RESPONSE_SIZE: usize = 8 * 1024 * 1024; // 8 Mib
 
         self.send_req_with_limit(req, MAX_DEFAULT_RESPONSE_SIZE)
@@ -142,19 +156,14 @@ impl GithubClient {
 
     pub async fn send_req_with_limit(
         &self,
-        req: RequestBuilder,
+        req: GithubRequest,
         max_response_size: usize,
     ) -> anyhow::Result<(Bytes, String)> {
         const MAX_ATTEMPTS: u32 = 2;
 
         log::debug!("send_req with {:?}", req);
 
-        let req_dbg = format!("{req:?}");
-
-        let req = req
-            .build()
-            .with_context(|| format!("building reqwest {req_dbg}"))?;
-
+        let (req, req_dbg) = self.prepare_request(req)?;
         let req_url = req.url().to_string();
 
         let mut resp = self.client.execute(req.try_clone().unwrap()).await?;
@@ -305,7 +314,7 @@ impl GithubClient {
         .boxed()
     }
 
-    pub async fn json<T>(&self, req: RequestBuilder) -> anyhow::Result<T>
+    pub async fn json<T>(&self, req: GithubRequest) -> anyhow::Result<T>
     where
         T: serde::de::DeserializeOwned,
     {
@@ -313,29 +322,29 @@ impl GithubClient {
         Ok(serde_json::from_slice(&body)?)
     }
 
-    pub fn get(&self, url: GithubUrl) -> RequestBuilder {
+    pub fn get(&self, url: GithubUrl) -> GithubRequest {
         log::trace!("get {:?}", url);
-        self.client.get(url.url().clone()).configure(self)
+        GithubRequest::new(url.clone(), self.client.get(url.url().clone()))
     }
 
-    pub fn patch(&self, url: GithubUrl) -> RequestBuilder {
+    pub fn patch(&self, url: GithubUrl) -> GithubRequest {
         log::trace!("patch {:?}", url);
-        self.client.patch(url.url().clone()).configure(self)
+        GithubRequest::new(url.clone(), self.client.patch(url.url().clone()))
     }
 
-    pub fn delete(&self, url: GithubUrl) -> RequestBuilder {
+    pub fn delete(&self, url: GithubUrl) -> GithubRequest {
         log::trace!("delete {:?}", url);
-        self.client.delete(url.url().clone()).configure(self)
+        GithubRequest::new(url.clone(), self.client.delete(url.url().clone()))
     }
 
-    pub fn post(&self, url: GithubUrl) -> RequestBuilder {
+    pub fn post(&self, url: GithubUrl) -> GithubRequest {
         log::trace!("post {:?}", url);
-        self.client.post(url.url().clone()).configure(self)
+        GithubRequest::new(url.clone(), self.client.post(url.url().clone()))
     }
 
-    pub fn put(&self, url: GithubUrl) -> RequestBuilder {
+    pub fn put(&self, url: GithubUrl) -> GithubRequest {
         log::trace!("put {:?}", url);
-        self.client.put(url.url().clone()).configure(self)
+        GithubRequest::new(url.clone(), self.client.put(url.url().clone()))
     }
 
     /// Fetch current rate limit, remaining and used, for the given repository.
@@ -406,6 +415,45 @@ impl GithubClient {
             })
         }
         Ok(result)
+    }
+}
+
+#[derive(Debug)]
+pub struct GithubRequest {
+    url: GithubUrl,
+    request: RequestBuilder,
+}
+
+impl GithubRequest {
+    pub(crate) fn new(url: GithubUrl, request: RequestBuilder) -> Self {
+        Self { url, request }
+    }
+
+    pub(crate) fn query<T: Serialize + ?Sized>(self, value: &T) -> Self {
+        Self {
+            url: self.url,
+            request: self.request.query(value),
+        }
+    }
+
+    pub(crate) fn header<K, V>(self, key: K, value: V) -> Self
+    where
+        HeaderName: TryFrom<K>,
+        <HeaderName as TryFrom<K>>::Error: Into<http::Error>,
+        HeaderValue: TryFrom<V>,
+        <HeaderValue as TryFrom<V>>::Error: Into<http::Error>,
+    {
+        Self {
+            url: self.url,
+            request: self.request.header(key, value),
+        }
+    }
+
+    pub(crate) fn json<T: Serialize>(self, value: &T) -> Self {
+        Self {
+            url: self.url,
+            request: self.request.json(value),
+        }
     }
 }
 
@@ -549,12 +597,13 @@ fn gh_api_version() {
         retry_rate_limit: false,
     };
 
-    let headers = c
-        .get(Url::parse("http://www.example.com").unwrap())
-        .configure(&c)
-        .build()
+    let request = c
+        .prepare_request(c.get(GithubUrl::generic(
+            Url::parse("http://www.example.com").unwrap(),
+        )))
         .unwrap();
-    let headers = headers
+    let headers = request
+        .0
         .headers()
         .iter()
         .filter(|h| h.0 == "x-github-api-version")

@@ -325,10 +325,7 @@ impl GithubClient {
             &IssueRepository::new(org, repo),
             url.clone(),
         ));
-        let req_dbg = format!("{req:?}");
-        let req = req
-            .build()
-            .with_context(|| format!("failed to build request {req_dbg:?}"))?;
+        let (req, req_dbg) = self.prepare_request(req)?;
         let resp: Response = self.raw().execute(req).await.context(req_dbg.clone())?;
         let status = resp.status();
 
