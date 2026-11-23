@@ -338,21 +338,20 @@ impl GithubClient {
         self.client.put(url.url().clone()).configure(self)
     }
 
-    /// Fetch current rate limit, remaining and used
-    pub async fn rate_limit(&self) -> anyhow::Result<RateLimitResources> {
-        todo!()
-        // #[derive(Debug, serde::Deserialize)]
-        // struct RateLimitResponse {
-        //     resources: RateLimitResources,
-        // }
-        //
-        // let url = self.api_url_with_segments(["rate_limit"]);
-        // let response = self
-        //     .json::<RateLimitResponse>(self.get(url))
-        //     .await
-        //     .context("failed to fetch GitHub /rate_limit endpoint")?;
-        //
-        // Ok(response.resources)
+    /// Fetch current rate limit, remaining and used, for the given repository.
+    pub async fn rate_limit(&self, repo: &IssueRepository) -> anyhow::Result<RateLimitResources> {
+        #[derive(Debug, serde::Deserialize)]
+        struct RateLimitResponse {
+            resources: RateLimitResources,
+        }
+
+        let url = self.api_url_with_segments(["rate_limit"]);
+        let response = self
+            .json::<RateLimitResponse>(self.get(GithubUrl::new(repo, url)))
+            .await
+            .context("failed to fetch GitHub /rate_limit endpoint")?;
+
+        Ok(response.resources)
     }
 
     /// Issues an ad-hoc GraphQL query.
@@ -517,7 +516,7 @@ impl Job for GithubRateLimitLoggingJob {
         ctx: &crate::handlers::Context,
         _metadata: &serde_json::Value,
     ) -> anyhow::Result<()> {
-        let rates = match ctx.github.rate_limit().await {
+        let rates = match ctx.github.rate_limit(&default_issue_repository()).await {
             Ok(rates) => rates,
             Err(err) => {
                 tracing::error!("failed to fetch the current rate limits for Github: {err:?}");

@@ -3,7 +3,7 @@
 use anyhow::Context as _;
 use axum::body::Body;
 use axum::error_handling::HandleErrorLayer;
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::HeaderName;
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
@@ -28,6 +28,7 @@ use tracing::{self as log, info_span};
 use triagebot::crates_io::CratesIoApi;
 use triagebot::gh_comments::{GH_COMMENTS_CACHE_CAPACITY_BYTES, GitHubCommentsCache};
 use triagebot::gha_logs::{GHA_LOGS_CACHE_CAPACITY_BYTES, GitHubActionLogsCache};
+use triagebot::github::IssueRepository;
 use triagebot::handlers::Context;
 use triagebot::handlers::pr_tracking::{
     RepositoryWorkqueueMap, ReviewerWorkqueue, get_review_tracked_repositories, load_workqueue,
@@ -317,13 +318,21 @@ async fn block_user_agents(req: Request<axum::body::Body>, next: Next) -> Respon
     next.run(req).await
 }
 
+#[derive(serde::Deserialize)]
+struct RepoPathParams {
+    owner: String,
+    repo: String,
+}
+
 /// Check if out GitHub rate limits are too low, reject the request if that's the case
 async fn block_if_github_ratelimit_too_low(
     State(ctx): State<Arc<Context>>,
+    Path(params): Path<RepoPathParams>,
     req: Request<axum::body::Body>,
     next: Next,
 ) -> Response {
-    let Ok(rl) = ctx.github.rate_limit().await else {
+    let repo = IssueRepository::new(&params.owner, &params.repo);
+    let Ok(rl) = ctx.github.rate_limit(&repo).await else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             "Could not read GitHub rate limit",
