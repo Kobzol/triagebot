@@ -1,8 +1,8 @@
+use crate::github::GithubClient;
+use crate::github::client::GithubUrl;
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
-
-use crate::github::GithubClient;
 
 #[derive(Debug, Clone)]
 pub struct UserRepository {
@@ -46,7 +46,7 @@ impl GithubClient {
             let page_str = page.to_string();
             let url = self.api_url_with_segments(["users", username, "repos"]);
             let page_repos: Vec<RepoResponse> = self
-                .json(self.get(url).query(&[
+                .json(self.get(GithubUrl::generic(url)).query(&[
                     ("sort", "created"),
                     ("direction", "desc"),
                     ("per_page", per_page_str.as_str()),

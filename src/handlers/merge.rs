@@ -138,11 +138,10 @@ async fn merge_pr_with_merge_queue(
     if !opinionated_reviews.is_empty() {
         let msg = format!("Approved by {}", &issue_comment.comment.user.login);
 
-        futures::future::try_join_all(
-            opinionated_reviews
-                .iter()
-                .map(|r| ctx.github.dismiss_review(&r.id, &msg)),
-        )
+        futures::future::try_join_all(opinionated_reviews.iter().map(|r| {
+            ctx.github
+                .dismiss_review(issue_comment.issue.repository(), &r.id, &msg)
+        }))
         .await
         .context("failed to dismiss the outstanding reviews")?;
     }

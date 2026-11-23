@@ -12,15 +12,20 @@ use std::time::{Duration, SystemTime};
 use tracing as log;
 use url::Url;
 
-use bytes::Bytes;
-
+use crate::github::IssueRepository;
 use crate::jobs::Job;
+use bytes::Bytes;
 
 // TODO: Update to "2026-03-10" and see what breaks
 // current version 2022-11-28 (supported until March 2028)
 // Note: If you specify an API version that is no longer supported, you will receive a 410 Gone response.
 // see: https://docs.github.com/rest/about-the-rest-api/api-versions?apiVersion=2026-03-10
 const GITHUB_API_VERSION: &str = "2022-11-28";
+
+/// Default repository used for API calls that are not attached to a specific repo.
+pub(crate) fn default_issue_repository() -> IssueRepository {
+    IssueRepository::new("rust-lang", "rust")
+}
 
 /// Finds the token in the user's environment, panicking if no suitable token
 /// can be found.
@@ -55,20 +60,6 @@ pub struct GithubClient {
     raw_url: Url,
     /// If `true`, requests will sleep if it hits GitHub's rate limit.
     retry_rate_limit: bool,
-}
-
-#[derive(Debug, serde::Deserialize)]
-pub struct RateLimitResources {
-    pub core: RateLimit,
-    pub search: RateLimit,
-    pub graphql: RateLimit,
-}
-
-#[derive(Debug, serde::Deserialize)]
-pub struct RateLimit {
-    pub limit: u64,
-    pub remaining: u64,
-    pub reset: u64,
 }
 
 impl GithubClient {
@@ -322,45 +313,46 @@ impl GithubClient {
         Ok(serde_json::from_slice(&body)?)
     }
 
-    pub fn get(&self, url: Url) -> RequestBuilder {
+    pub fn get(&self, url: GithubUrl) -> RequestBuilder {
         log::trace!("get {:?}", url);
-        self.client.get(url).configure(self)
+        self.client.get(url.url().clone()).configure(self)
     }
 
-    pub fn patch(&self, url: Url) -> RequestBuilder {
+    pub fn patch(&self, url: GithubUrl) -> RequestBuilder {
         log::trace!("patch {:?}", url);
-        self.client.patch(url).configure(self)
+        self.client.patch(url.url().clone()).configure(self)
     }
 
-    pub fn delete(&self, url: Url) -> RequestBuilder {
+    pub fn delete(&self, url: GithubUrl) -> RequestBuilder {
         log::trace!("delete {:?}", url);
-        self.client.delete(url).configure(self)
+        self.client.delete(url.url().clone()).configure(self)
     }
 
-    pub fn post(&self, url: Url) -> RequestBuilder {
+    pub fn post(&self, url: GithubUrl) -> RequestBuilder {
         log::trace!("post {:?}", url);
-        self.client.post(url).configure(self)
+        self.client.post(url.url().clone()).configure(self)
     }
 
-    pub fn put(&self, url: Url) -> RequestBuilder {
+    pub fn put(&self, url: GithubUrl) -> RequestBuilder {
         log::trace!("put {:?}", url);
-        self.client.put(url).configure(self)
+        self.client.put(url.url().clone()).configure(self)
     }
 
     /// Fetch current rate limit, remaining and used
     pub async fn rate_limit(&self) -> anyhow::Result<RateLimitResources> {
-        #[derive(Debug, serde::Deserialize)]
-        struct RateLimitResponse {
-            resources: RateLimitResources,
-        }
-
-        let url = self.api_url_with_segments(["rate_limit"]);
-        let response = self
-            .json::<RateLimitResponse>(self.get(url))
-            .await
-            .context("failed to fetch GitHub /rate_limit endpoint")?;
-
-        Ok(response.resources)
+        todo!()
+        // #[derive(Debug, serde::Deserialize)]
+        // struct RateLimitResponse {
+        //     resources: RateLimitResources,
+        // }
+        //
+        // let url = self.api_url_with_segments(["rate_limit"]);
+        // let response = self
+        //     .json::<RateLimitResponse>(self.get(url))
+        //     .await
+        //     .context("failed to fetch GitHub /rate_limit endpoint")?;
+        //
+        // Ok(response.resources)
     }
 
     /// Issues an ad-hoc GraphQL query.
@@ -372,6 +364,7 @@ impl GithubClient {
     /// error message.
     pub async fn graphql_query_with_errors(
         &self,
+        repo: &IssueRepository,
         query: &str,
         vars: serde_json::Value,
     ) -> anyhow::Result<serde_json::Value> {
@@ -381,7 +374,7 @@ impl GithubClient {
 
         let (body, _dbg) = self
             .send_req_with_limit(
-                self.post(self.graphql_url.clone())
+                self.post(GithubUrl::new(repo, self.graphql_url.clone()))
                     .json(&serde_json::json!({
                         "query": query,
                         "variables": vars,
@@ -399,10 +392,12 @@ impl GithubClient {
     /// for specific errors.
     pub async fn graphql_query(
         &self,
+        repo: &IssueRepository,
         query: &str,
         vars: serde_json::Value,
     ) -> anyhow::Result<serde_json::Value> {
-        let mut result: serde_json::Value = self.graphql_query_with_errors(query, vars).await?;
+        let mut result: serde_json::Value =
+            self.graphql_query_with_errors(repo, query, vars).await?;
         if let Some(errors) = result["errors"].take().as_array_mut() {
             anyhow::bail!(GraphQlErrors {
                 errors: std::mem::take(errors)
@@ -413,6 +408,53 @@ impl GithubClient {
         }
         Ok(result)
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct GithubUrl {
+    url: Url,
+    repo: IssueRepository,
+}
+
+impl GithubUrl {
+    pub(crate) fn new(repo: &IssueRepository, url: Url) -> Self {
+        Self {
+            url,
+            repo: repo.clone(),
+        }
+    }
+
+    pub(crate) fn generic(url: Url) -> Self {
+        Self::new(&default_issue_repository(), url)
+    }
+
+    pub(crate) fn url(&self) -> &Url {
+        &self.url
+    }
+
+    pub(crate) fn map_url<F>(self, map_url: F) -> Self
+    where
+        F: FnOnce(Url) -> Url,
+    {
+        Self {
+            url: map_url(self.url),
+            repo: self.repo,
+        }
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct RateLimitResources {
+    pub core: RateLimit,
+    pub search: RateLimit,
+    pub graphql: RateLimit,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct RateLimit {
+    pub limit: u64,
+    pub remaining: u64,
+    pub reset: u64,
 }
 
 #[derive(Debug)]

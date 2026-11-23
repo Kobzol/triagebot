@@ -5,6 +5,7 @@ use super::{FileDiff, GithubClient, GithubCompare, Issue, IssueRepository, PullR
 
 use super::UserId;
 
+use crate::github::client::GithubUrl;
 use anyhow::Context;
 use bytes::Bytes;
 use chrono::{DateTime, FixedOffset};
@@ -208,11 +209,15 @@ impl GithubClient {
         before: &str,
         after: &str,
     ) -> anyhow::Result<GithubCompare> {
-        let mut url = repo.url(self, ["compare", &format!("{before}...{after}")]);
-        {
-            let mut queries = url.query_pairs_mut();
-            queries.append_pair("per_page", "1000");
-        }
+        let url = repo
+            .url(self, ["compare", &format!("{before}...{after}")])
+            .map_url(|mut url| {
+                {
+                    let mut queries = url.query_pairs_mut();
+                    queries.append_pair("per_page", "1000");
+                }
+                url
+            });
 
         let compare: GithubCompare<FileDiff<Option<String>>> = self
             .json(self.get(url))
@@ -316,7 +321,10 @@ impl GithubClient {
             .split_once('/')
             .context("invalid full repo name in raw_file")?;
         let url = self.raw_url_with_segments([org, repo, branch, path]);
-        let req = self.get(url.clone());
+        let req = self.get(GithubUrl::new(
+            &IssueRepository::new(org, repo),
+            url.clone(),
+        ));
         let req_dbg = format!("{req:?}");
         let req = req
             .build()
@@ -355,7 +363,12 @@ impl GithubClient {
     /// Get an individual rust-lang/rust commit details (including modified files)
     pub async fn rust_commit(&self, sha: &str) -> Option<GithubCommit> {
         let url = self.api_url_with_segments(["repos", "rust-lang", "rust", "commits", sha]);
-        let req = self.get(url).query(&[("per_page", "1000")]);
+        let req = self
+            .get(GithubUrl::new(
+                &IssueRepository::new("rust-lang", "rust"),
+                url,
+            ))
+            .query(&[("per_page", "1000")]);
         match self.json(req).await {
             Ok(r) => Some(r),
             Err(e) => {
@@ -373,7 +386,7 @@ impl GithubClient {
             .split_once("/")
             .context("invalid full repo name")?;
         let url = self.api_url_with_segments(["repos", org, repo]);
-        self.json(self.get(url))
+        self.json(self.get(GithubUrl::new(&IssueRepository::new(org, repo), url)))
             .await
             .with_context(|| format!("{full_repo_name} failed to get repo"))
     }
@@ -382,6 +395,7 @@ impl GithubClient {
     pub async fn graphql_repo_id(&self, owner: &str, repo: &str) -> anyhow::Result<String> {
         let mut repo_id = self
             .graphql_query(
+                &IssueRepository::new(owner, repo),
                 "query($owner:String!, $repo:String!) {
                     repository(owner: $owner, name: $repo) {
                         id
@@ -406,9 +420,14 @@ impl GithubClient {
     /// and
     /// <https://docs.github.com/en/search-github/getting-started-with-searching-on-github/understanding-the-search-syntax>
     /// for the query syntax.
-    pub async fn issue_search_count(&self, query: &str) -> anyhow::Result<u64> {
+    pub async fn issue_search_count(
+        &self,
+        repo: &IssueRepository,
+        query: &str,
+    ) -> anyhow::Result<u64> {
         let data = self
             .graphql_query(
+                repo,
                 "query($query: String!) {
                   search(query: $query, type: ISSUE, first: 0) {
                     issueCount
@@ -449,11 +468,14 @@ impl GithubClient {
             .split_once("/")
             .context("invalid full repo name")?;
         let url = self.api_url_with_segments(["repos", org, repo, "milestones"]);
-        let resp = self
-            .send_req(self.post(url.clone()).json(&serde_json::json!({
-                "title": title,
-                "state": state,
-            })))
+        let gh_repo = IssueRepository::new(org, repo);
+        let resp =
+            self.send_req(self.post(GithubUrl::new(&gh_repo, url.clone())).json(
+                &serde_json::json!({
+                    "title": title,
+                    "state": state,
+                }),
+            ))
             .await;
         match resp {
             Ok((body, _dbg)) => {
@@ -481,7 +503,7 @@ impl GithubClient {
                 .append_pair("page", num!(page))
                 .append_pair("state", "all");
             let milestones: Vec<Milestone> = self
-                .json(self.get(url.clone()))
+                .json(self.get(GithubUrl::new(&gh_repo, url.clone())))
                 .await
                 .with_context(|| format!("failed to get milestones {url} searching for {title}"))?;
             if milestones.is_empty() {
@@ -505,9 +527,15 @@ impl GithubClient {
             .split_once("/")
             .context("invalid full repo name")?;
         let url = self.api_url_with_segments(["repos", org, repo, "issues", num!(issue_num)]);
-        self.send_req(self.patch(url.clone()).json(&serde_json::json!({
-            "milestone": milestone.number
-        })))
+        self.send_req(
+            self.patch(GithubUrl::new(
+                &IssueRepository::new(org, repo),
+                url.clone(),
+            ))
+            .json(&serde_json::json!({
+                "milestone": milestone.number
+            })),
+        )
         .await
         .with_context(|| format!("failed to set milestone for {url} to milestone {milestone:?}"))?;
         Ok(())
@@ -525,15 +553,20 @@ pub struct Repository {
 }
 
 impl Repository {
-    pub(crate) fn url<'a, I>(&'a self, client: &GithubClient, segments: I) -> Url
+    pub(crate) fn url<'a, I>(&'a self, client: &GithubClient, segments: I) -> GithubUrl
     where
         I: IntoIterator<Item = &'a str>,
     {
-        client.api_url_with_segments(
+        let url = client.api_url_with_segments(
             ["repos", self.owner(), self.name()]
                 .into_iter()
                 .chain(segments),
-        )
+        );
+        GithubUrl::new(&self.repo(), url)
+    }
+
+    fn repo(&self) -> IssueRepository {
+        IssueRepository::new(self.owner(), self.name())
     }
 
     pub fn owner(&self) -> &str {
@@ -613,7 +646,8 @@ impl Repository {
             };
 
             // FIXME: make the above functions return an url
-            let result = client.get(Url::parse(&url).expect("unexpected invalid get_issues Url"));
+            let url = Url::parse(&url).expect("unexpected invalid get_issues Url");
+            let result = client.get(GithubUrl::new(&self.repo(), url.clone()));
             if use_search_api {
                 let result = client
                     .json::<IssueSearchResult>(result)
@@ -850,7 +884,7 @@ impl GithubClient {
         refname: &str,
     ) -> anyhow::Result<GitReference> {
         let url = self.api_url_with_segments(["repos", org, repo, "git", "ref", refname]);
-        self.json(self.get(url))
+        self.json(self.get(GithubUrl::new(&IssueRepository::new(org, repo), url)))
             .await
             .with_context(|| format!("{org}/{repo} failed to get git reference {refname}"))
     }
@@ -926,6 +960,7 @@ impl Repository {
         loop {
             let mut data = client
                 .graphql_query(
+                    &self.repo(),
                     "query($owner:String!, $repo:String!, $after:String) {
                        repository(owner: $owner, name: $repo) {
                          pullRequests(states: OPEN, first: 100, after: $after) {
@@ -1062,15 +1097,18 @@ impl Repository {
         let mut commits = Vec::new();
         let mut page = 1;
         loop {
-            let mut url = self.url(client, ["commits"]);
-            url.query_pairs_mut()
-                .append_pair("sha", end)
-                .append_pair("per_page", "100")
-                .append_pair("page", &page.to_string());
+            let url = self.url(client, ["commits"]).map_url(|mut url| {
+                url.query_pairs_mut()
+                    .append_pair("sha", end)
+                    .append_pair("per_page", "100")
+                    .append_pair("page", &page.to_string());
+                url
+            });
+
             let mut this_page: Vec<GithubCommit> = client
                 .json(client.get(url.clone()))
                 .await
-                .with_context(|| format!("failed to fetch commits for {url}"))?;
+                .with_context(|| format!("failed to fetch commits for {}", url.url()))?;
             // This is a temporary debugging measure to investigate why the
             // `/commits` endpoint is not returning the expected values in
             // production.
@@ -1169,7 +1207,10 @@ impl Repository {
     ) -> anyhow::Result<Submodule> {
         let mut url = self.url(client, ["contents", path]);
         if let Some(refname) = refname {
-            url.query_pairs_mut().append_pair("ref", refname);
+            url = url.map_url(|mut url| {
+                url.query_pairs_mut().append_pair("ref", refname);
+                url
+            });
         }
         client.json(client.get(url)).await.with_context(|| {
             format!(

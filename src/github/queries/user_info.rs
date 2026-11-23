@@ -1,6 +1,7 @@
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 
+use crate::github::client::GithubUrl;
 use crate::github::{GithubClient, UserId};
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -17,7 +18,7 @@ impl GithubClient {
     pub async fn user_info(&self, username: &str) -> anyhow::Result<UserInfo> {
         let url = self.api_url_with_segments(["users", username]);
         let info: UserInfo = self
-            .json(self.get(url))
+            .json(self.get(GithubUrl::generic(url)))
             .await
             .with_context(|| format!("failed to fetch user info for {username}"))?;
 

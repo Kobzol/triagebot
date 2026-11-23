@@ -1,7 +1,7 @@
+use crate::github::GithubClient;
+use crate::github::client::default_issue_repository;
 use anyhow::Context;
 use chrono::{DateTime, Utc};
-
-use crate::github::GithubClient;
 
 /// Aggregated contribution counts for a user over a given time window.
 pub struct UserContributions {
@@ -24,6 +24,7 @@ impl GithubClient {
 
         let data = self
             .graphql_query(
+                &default_issue_repository(),
                 r#"
 query($username: String!, $from: DateTime!, $to: DateTime!) {
   user(login: $username) {

@@ -1,7 +1,7 @@
+use crate::github::GithubClient;
+use crate::github::client::default_issue_repository;
 use anyhow::Context;
 use chrono::{DateTime, Utc};
-
-use crate::github::GithubClient;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PullRequestState {
@@ -79,6 +79,7 @@ impl GithubClient {
             let page_size = (limit - prs.len()).min(MAX_PAGE_SIZE);
             let data = self
                 .graphql_query(
+                    &default_issue_repository(),
                     r#"
 query($username: String!, $pageSize: Int!, $cursor: String) {
   user(login: $username) {
@@ -153,6 +154,7 @@ query($username: String!, $pageSize: Int!, $cursor: String) {
 
         let data = self
             .graphql_query(
+                &default_issue_repository(),
                 r#"
 query($query: String!, $limit: Int!) {
   search(query: $query, type: ISSUE, first: $limit) {

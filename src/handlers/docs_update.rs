@@ -1,6 +1,6 @@
 //! A scheduled job to post a PR to update the documentation on rust-lang/rust.
 
-use crate::github::{self, GitTreeEntry, GithubClient, Issue, Repository};
+use crate::github::{self, GitTreeEntry, GithubClient, Issue, IssueRepository, Repository};
 use crate::jobs::Job;
 use anyhow::Context;
 use anyhow::Result;
@@ -89,9 +89,10 @@ pub async fn docs_update() -> Result<Option<Issue>> {
 
 async fn is_pr_already_open(gh: &GithubClient) -> Result<bool> {
     let count = gh
-        .issue_search_count(&format!(
-            "repo:{DEST_REPO} is:pr is:open author:rustbot head:{BRANCH_NAME}"
-        ))
+        .issue_search_count(
+            &IssueRepository::new("rust-lang", "rust"),
+            &format!("repo:{DEST_REPO} is:pr is:open author:rustbot head:{BRANCH_NAME}"),
+        )
         .await?;
     Ok(count != 0)
 }

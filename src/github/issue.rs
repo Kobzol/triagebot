@@ -6,9 +6,8 @@ use reqwest::StatusCode;
 use std::fmt;
 use std::sync::OnceLock;
 use tracing as log;
-use url::Url;
 
-use super::client::GithubClient;
+use super::client::{GithubClient, GithubUrl};
 use super::repos::{GitHubUser, Milestone, Repository};
 use super::utils::{Selection, opt_string};
 use crate::errors::{AssignmentError, UserError};
@@ -566,6 +565,7 @@ impl Issue {
         let repo = self.repository();
         let mut issue_id = client
             .graphql_query(
+                repo,
                 "query($owner:String!, $repo:String!, $issueNum:Int!) {
                     repository(owner: $owner, name: $repo) {
                         issueOrPullRequest(number: $issueNum) {
@@ -605,6 +605,7 @@ impl Issue {
         let repo_id = client.graphql_repo_id(owner, repo).await?;
         client
             .graphql_query(
+                &IssueRepository::new(owner, repo),
                 "mutation ($issueId: ID!, $repoId: ID!) {
                   transferIssue(
                     input: {createLabelsIfMissing: false, issueId: $issueId, repositoryId: $repoId}
@@ -629,6 +630,7 @@ impl Issue {
 
         client
             .graphql_query(
+                self.repository(),
                 "mutation ($pullRequestId: ID!) {
                   enablePullRequestAutoMerge(input: { pullRequestId: $pullRequestId }) {
                     clientMutationId
@@ -649,6 +651,7 @@ impl Issue {
 
         client
             .graphql_query(
+                self.repository(),
                 "mutation ($pullRequestId: ID!) {
                   enqueuePullRequest(input: { pullRequestId: $pullRequestId }) {
                     clientMutationId
@@ -790,13 +793,15 @@ impl Issue {
         &self,
         client: &GithubClient,
     ) -> anyhow::Result<Vec<Comment>> {
-        let mut comments_url = self
+        let comments_url = self
             .repository()
             .url(client, ["issues", num!(self.number), "comments"]);
-        comments_url
-            .query_pairs_mut()
-            .append_pair("page", "1")
-            .append_pair("per_page", "100");
+        let comments_url = comments_url.map_url(|mut url| {
+            url.query_pairs_mut()
+                .append_pair("page", "1")
+                .append_pair("per_page", "100");
+            url
+        });
         client.json::<Vec<Comment>>(client.get(comments_url)).await
     }
 
@@ -870,6 +875,7 @@ impl Issue {
     ) -> anyhow::Result<()> {
         client
             .graphql_query(
+                self.repository(),
                 "mutation($node_id: ID!, $reason: ReportedContentClassifiers!) {
                     minimizeComment(input: {subjectId: $node_id, classifier: $reason}) {
                         __typename
@@ -1031,15 +1037,23 @@ impl fmt::Display for IssueRepository {
 }
 
 impl IssueRepository {
-    pub(crate) fn url<'a, I>(&'a self, client: &GithubClient, segments: I) -> Url
+    pub fn new(owner: &str, name: &str) -> Self {
+        Self {
+            organization: owner.to_string(),
+            repository: name.to_string(),
+        }
+    }
+
+    pub(crate) fn url<'a, I>(&'a self, client: &GithubClient, segments: I) -> GithubUrl
     where
         I: IntoIterator<Item = &'a str>,
     {
-        client.api_url_with_segments(
+        let url = client.api_url_with_segments(
             ["repos", &self.organization, &self.repository]
                 .into_iter()
                 .chain(segments),
-        )
+        );
+        GithubUrl::new(self, url)
     }
 
     pub(crate) fn full_repo_name(&self) -> String {

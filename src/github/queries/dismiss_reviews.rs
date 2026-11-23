@@ -1,6 +1,6 @@
 use anyhow::Context as _;
 
-use crate::github::GithubClient;
+use crate::github::{GithubClient, IssueRepository};
 
 #[derive(Debug, serde::Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -30,6 +30,7 @@ impl GithubClient {
         loop {
             let mut data = self
                 .graphql_query(
+                    &IssueRepository::new(owner, repo),
                     r#"
 query OpinionatedReviews($owner: String!, $repo: String!, $prNumber: Int!, $after: String) {
   repository(owner: $owner, name: $repo) {
@@ -84,11 +85,13 @@ query OpinionatedReviews($owner: String!, $repo: String!, $prNumber: Int!, $afte
 
     pub(crate) async fn dismiss_review(
         &self,
+        repo: &IssueRepository,
         review_id: &str,
         message: &str,
     ) -> anyhow::Result<()> {
         self
             .graphql_query(
+                repo,
                 r"mutation($reviewId: ID!, $message: String!) {
                     dismissPullRequestReview(input: { pullRequestReviewId: $reviewId, message: $message }) {
                         clientMutationId

@@ -1,7 +1,7 @@
 use anyhow::Context as _;
 use serde::Deserialize;
 
-use crate::github::GithubClient;
+use crate::github::{GithubClient, IssueRepository};
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -99,6 +99,7 @@ impl GithubClient {
         loop {
             let mut data = self
                 .graphql_query(
+                    &IssueRepository::new(owner, name),
                     r#"
         query LeastRecentlyReviewedPullRequests(
             $repository_owner: String!,

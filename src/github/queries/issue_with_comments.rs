@@ -1,6 +1,6 @@
 use anyhow::Context;
 
-use crate::github::GithubClient;
+use crate::github::{GithubClient, IssueRepository};
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct GitHubIssueWithComments {
@@ -244,6 +244,7 @@ impl GithubClient {
         loop {
             let mut data = self
         .graphql_query(
+            &IssueRepository::new(owner, repo),
             "
 query ($owner: String!, $repo: String!, $issueNumber: Int!, $commentsCursor: String, $reviewThreadsCursor: String, $reviewsCursor: String) {
   repository(owner: $owner, name: $repo) {

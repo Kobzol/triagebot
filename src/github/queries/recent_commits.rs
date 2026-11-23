@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use anyhow::Context as _;
 use chrono::{DateTime, Utc};
 
-use crate::github::{GithubClient, Repository};
+use crate::github::{GithubClient, IssueRepository, Repository};
 
 #[derive(Debug)]
 pub struct RecentCommit {
@@ -130,6 +130,7 @@ impl Repository {
         for _ in 0..3 {
             let mut data = client
                 .graphql_query(
+                    &IssueRepository::new(self.owner(), self.name()),
                     r#"
 query RecentCommits($name: String!, $owner: String!, $branch: String!, $after: String) {
   repository(name: $name, owner: $owner) {

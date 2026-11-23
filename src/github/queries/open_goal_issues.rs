@@ -1,6 +1,6 @@
 use anyhow::Context;
 
-use crate::github::GithubClient;
+use crate::github::{GithubClient, IssueRepository};
 
 const ORG: &str = "rust-lang";
 const REPO: &str = "goals";
@@ -119,6 +119,7 @@ impl GithubClient {
         loop {
             let mut response = self
                 .graphql_query(
+                    &IssueRepository::new(ORG, REPO),
                     r#"
 query (
   $owner: String!

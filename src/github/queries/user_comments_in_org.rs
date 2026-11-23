@@ -1,7 +1,7 @@
+use crate::github::GithubClient;
+use crate::github::client::default_issue_repository;
 use anyhow::Context;
 use chrono::{DateTime, Utc};
-
-use crate::github::GithubClient;
 
 /// A comment made by a user on an issue or PR.
 #[derive(Debug, Clone)]
@@ -44,6 +44,7 @@ impl GithubClient {
 
         let data = self
             .graphql_query(
+                &default_issue_repository(),
                 r#"
 query($query: String!, $issueLimit: Int!, $commentLimit: Int!) {
   search(query: $query, type: ISSUE, first: $issueLimit) {
